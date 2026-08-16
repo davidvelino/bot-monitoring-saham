@@ -9,7 +9,7 @@ APIFY_TOKEN = os.getenv("APIFY_TOKEN")
 
 # Kata kunci yang dipantau
 KEYWORDS = ["saham", "crypto", "bitcoin", "ihsg", "btc"]
-MIN_VIEWS = 100  # Trigger minimal 100 views
+MIN_VIEWS = 100  # Trigger minimal views / likes
 
 def send_telegram_alert(message):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
@@ -20,35 +20,28 @@ def send_telegram_alert(message):
     except Exception as e:
         print(f"ERROR TELEGRAM: {e}")
 
-def extract_views(item):
-    """Mencari views secara pintar dari angka, string, maupun objek berlapis"""
+def extract_metrics(item):
+    """Mengekstrak views, atau fallback ke likes jika views dari X bernilai 0"""
     if not isinstance(item, dict):
-        return 0
-    
-    # 1. Cari key yang mengandung kata 'view' atau 'impression'
-    for key, val in item.items():
-        key_lower = str(key).lower()
-        if "view" in key_lower or "impression" in key_lower:
-            if isinstance(val, (int, float)) and val > 0:
-                return int(val)
-            if isinstance(val, str) and val.isdigit():
-                return int(val)
-            if isinstance(val, dict):
-                for sub_val in val.values():
-                    if isinstance(sub_val, (int, float)) and sub_val > 0:
-                        return int(sub_val)
-                    if isinstance(sub_val, str) and sub_val.isdigit():
-                        return int(sub_val)
+        return 0, 0
 
-    # 2. Periksa objek berlapis seperti metrics/legacy/stats
-    for nested_key in ["metrics", "legacy", "stats", "public_metrics"]:
-        nested = item.get(nested_key)
-        if isinstance(nested, dict):
-            res = extract_views(nested)
-            if res > 0:
-                return res
+    views = 0
+    for key in ["viewCount", "viewsCount", "view_count", "views", "impressionCount"]:
+        val = item.get(key)
+        if val is not None and isinstance(val, (int, float)) and val > 0:
+            views = int(val)
+            break
+        elif isinstance(val, str) and val.isdigit():
+            views = int(val)
+            break
 
-    return 0
+    likes = item.get("likeCount") or item.get("likes") or item.get("favorite_count") or 0
+    try:
+        likes = int(likes)
+    except Exception:
+        likes = 0
+
+    return views, likes
 
 def check_social_media():
     print("Memulai pengecekan postingan viral...")
@@ -61,34 +54,41 @@ def check_social_media():
 
     for keyword in KEYWORDS:
         print(f"Mencetak keyword: {keyword}")
+        
+        # Parameter pencarian yang sesuai untuk apidojo~tweet-scraper
         payload = {
-            "searchQueries": [keyword],
-            "maxItems": 10
+            "customQueries": [keyword],
+            "searchTerms": [keyword],
+            "maxItems": 10,
+            "sort": "Top"
         }
+        
         try:
             response = requests.post(apify_url, json=payload, timeout=120)
             print(f"Status Apify [{keyword}]: {response.status_code}")
             
             if response.status_code in [200, 201]:
                 items = response.json()
-                print(f"Dapat {len(items)} postingan dari Apify.")
+                print(f"Dapat {len(items)} item dari Apify.")
                 
-                if items and isinstance(items, list) and isinstance(items[0], dict):
-                    # Menampilkan struktur kunci data pertama untuk debugging
-                    print(f"DEBUG - Sample Keys Tweet: {list(items[0].keys())}")
-
                 for item in items:
                     if not isinstance(item, dict):
                         continue
                     
-                    views = extract_views(item)
+                    # Abaikan jika respons merupakan indikator hasil kosong
+                    if "noResults" in item or item.get("noResults") is True:
+                        print(f"--> Apify: Hasil pencarian kosong untuk '{keyword}'")
+                        continue
+                    
+                    views, likes = extract_metrics(item)
                     text = item.get("text") or item.get("fullText") or item.get("full_text") or ""
                     url = item.get("url") or item.get("twitterUrl") or item.get("tweetUrl") or ""
 
-                    print(f"--> Views terbaca: {views} | Teks: {text[:30]}...")
+                    print(f"--> Postingan Ditemukan! Views: {views} | Likes: {likes} | Teks: {text[:30]}...")
 
-                    if views >= MIN_VIEWS:
-                        msg = f"🔥 <b>Postingan Viral Found ({views} views)!</b>\n\n{text}\n\n<a href='{url}'>Buka Postingan</a>"
+                    if text:
+                        metric_text = f"{views} views" if views > 0 else f"{likes} likes"
+                        msg = f"🔥 <b>Postingan Viral Found ({metric_text})!</b>\n\n{text}\n\n<a href='{url}'>Buka Postingan</a>"
                         send_telegram_alert(msg)
             else:
                 print(f"Apify Gagal: {response.text}")
