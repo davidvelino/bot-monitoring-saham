@@ -2,14 +2,14 @@ import os
 import time
 import requests
 
-# Mengambil konfigurasi dari Environment Variables
+# Mengambil konfigurasi dari Environment Variables Railway
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 APIFY_TOKEN = os.getenv("APIFY_TOKEN")
 
 # Kata kunci yang dipantau
 KEYWORDS = ["saham", "crypto", "bitcoin", "ihsg", "btc"]
-MIN_VIEWS = 5000  # Trigger 5k views
+MIN_VIEWS = 5000  # Trigger minimal 5k views
 
 def send_telegram_alert(message):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
@@ -27,15 +27,17 @@ def check_social_media():
         print("ERROR: APIFY_TOKEN tidak ditemukan di Variables Railway!")
         return
 
+    # Menggunakan Actor Apify yang aktif: apidojo~tweet-scraper
     apify_url = f"https://api.apify.com/v2/acts/apidojo~tweet-scraper/run-sync-get-dataset-items?token={APIFY_TOKEN}"
+
     for keyword in KEYWORDS:
         print(f"Mencetak keyword: {keyword}")
         payload = {
-            "searchTerms": [keyword],
+            "searchQueries": [keyword],
             "maxItems": 10
         }
         try:
-            response = requests.post(apify_url, json=payload, timeout=60)
+            response = requests.post(apify_url, json=payload, timeout=120)
             print(f"Status Apify [{keyword}]: {response.status_code}")
             
             if response.status_code in [200, 201]:
