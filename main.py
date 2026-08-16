@@ -55,7 +55,6 @@ def check_social_media():
     for keyword in KEYWORDS:
         print(f"Mencetak keyword: {keyword}")
         
-        # Payload murni dan bersih untuk apidojo~tweet-scraper
         payload = {
             "searchTerms": [keyword],
             "maxItems": 10,
@@ -75,8 +74,8 @@ def check_social_media():
                     if not isinstance(item, dict):
                         continue
                     
-                    # Abaikan item indikator hasil kosong
-                    if item.get("noResults") is True or "noResults" in item:
+                    # Hanya lewati jika nilai 'noResults' bernilai True secara eksplisit
+                    if item.get("noResults") is True:
                         continue
                     
                     text = item.get("text") or item.get("fullText") or item.get("full_text") or ""
