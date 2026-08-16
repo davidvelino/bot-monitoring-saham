@@ -21,7 +21,7 @@ def send_telegram_alert(message):
         print(f"ERROR TELEGRAM: {e}")
 
 def extract_metrics(item):
-    """Mengekstrak views, atau fallback ke likes jika views dari X bernilai 0"""
+    """Mengekstrak views dan likes"""
     if not isinstance(item, dict):
         return 0, 0
 
@@ -55,9 +55,8 @@ def check_social_media():
     for keyword in KEYWORDS:
         print(f"Mencetak keyword: {keyword}")
         
-        # Parameter pencarian yang sesuai untuk apidojo~tweet-scraper
+        # Payload murni dan bersih untuk apidojo~tweet-scraper
         payload = {
-            "customQueries": [keyword],
             "searchTerms": [keyword],
             "maxItems": 10,
             "sort": "Top"
@@ -69,29 +68,36 @@ def check_social_media():
             
             if response.status_code in [200, 201]:
                 items = response.json()
-                print(f"Dapat {len(items)} item dari Apify.")
+                print(f"Dapat {len(items)} item dari Apify untuk [{keyword}].")
                 
+                valid_count = 0
                 for item in items:
                     if not isinstance(item, dict):
                         continue
                     
-                    # Abaikan jika respons merupakan indikator hasil kosong
-                    if "noResults" in item or item.get("noResults") is True:
-                        print(f"--> Apify: Hasil pencarian kosong untuk '{keyword}'")
+                    # Abaikan item indikator hasil kosong
+                    if item.get("noResults") is True or "noResults" in item:
                         continue
                     
-                    views, likes = extract_metrics(item)
                     text = item.get("text") or item.get("fullText") or item.get("full_text") or ""
                     url = item.get("url") or item.get("twitterUrl") or item.get("tweetUrl") or ""
+                    
+                    if not text:
+                        continue
+                        
+                    valid_count += 1
+                    views, likes = extract_metrics(item)
 
-                    print(f"--> Postingan Ditemukan! Views: {views} | Likes: {likes} | Teks: {text[:30]}...")
+                    print(f"--> Postingan Found [{keyword}] | Views: {views} | Likes: {likes} | Teks: {text[:30]}...")
 
-                    if text:
-                        metric_text = f"{views} views" if views > 0 else f"{likes} likes"
-                        msg = f"🔥 <b>Postingan Viral Found ({metric_text})!</b>\n\n{text}\n\n<a href='{url}'>Buka Postingan</a>"
-                        send_telegram_alert(msg)
+                    metric_text = f"{views} views" if views > 0 else f"{likes} likes"
+                    msg = f"🔥 <b>Postingan Viral Found ({metric_text})!</b>\n\nKeyword: #{keyword}\n\n{text}\n\n<a href='{url}'>Buka Postingan</a>"
+                    send_telegram_alert(msg)
+                    
+                if valid_count == 0:
+                    print(f"--> Apify: Tidak ada postingan valid untuk '{keyword}'")
             else:
-                print(f"Apify Gagal: {response.text}")
+                print(f"Apify Gagal [{keyword}]: {response.text}")
         except Exception as e:
             print(f"ERROR SAAT MEMANGGIL APIFY [{keyword}]: {e}")
 
