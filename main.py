@@ -9,7 +9,7 @@ APIFY_TOKEN = os.getenv("APIFY_TOKEN")
 
 # Kata kunci yang dipantau
 KEYWORDS = ["saham", "crypto", "bitcoin", "ihsg", "btc"]
-MIN_VIEWS = 5000  # Trigger minimal 5k views
+MIN_VIEWS = 100  # Trigger minimal 5k views
 
 def send_telegram_alert(message):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
