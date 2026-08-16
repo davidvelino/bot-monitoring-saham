@@ -9,7 +9,7 @@ APIFY_TOKEN = os.getenv("APIFY_TOKEN")
 
 # Kata kunci yang dipantau
 KEYWORDS = ["saham", "crypto", "bitcoin", "ihsg", "btc"]
-MIN_VIEWS = 100  # Trigger minimal 5k views
+MIN_VIEWS = 100  # Trigger minimal 100 views (bisa dinaikkan lagi nanti)
 
 def send_telegram_alert(message):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
@@ -44,10 +44,20 @@ def check_social_media():
                 items = response.json()
                 print(f"Dapat {len(items)} postingan dari Apify.")
                 for item in items:
-                    views = item.get("viewCount", 0) or item.get("views", 0)
+                    # Memeriksa beberapa kemungkinan nama field views dari Apify
+                    views = (
+                        item.get("viewCount") 
+                        or item.get("viewsCount") 
+                        or item.get("views") 
+                        or item.get("impressionCount") 
+                        or 0
+                    )
+                    text = item.get("text") or item.get("fullText") or ""
+                    url = item.get("url") or item.get("twitterUrl") or ""
+
+                    print(f"--> Views terbaca: {views} | Teks: {text[:30]}...")
+
                     if views >= MIN_VIEWS:
-                        text = item.get("text", "")
-                        url = item.get("url", "")
                         msg = f"🔥 <b>Postingan Viral Found ({views} views)!</b>\n\n{text}\n\n<a href='{url}'>Buka Postingan</a>"
                         send_telegram_alert(msg)
             else:
