@@ -27,8 +27,7 @@ def check_social_media():
         print("ERROR: APIFY_TOKEN tidak ditemukan di Variables Railway!")
         return
 
-    apify_url = f"https://api.apify.com/v2/acts/apify~tweet-scraper/run-sync-get-dataset-items?token={APIFY_TOKEN}"
-
+    apify_url = f"https://api.apify.com/v2/acts/apidojo~tweet-scraper/run-sync-get-dataset-items?token={APIFY_TOKEN}"
     for keyword in KEYWORDS:
         print(f"Mencetak keyword: {keyword}")
         payload = {
