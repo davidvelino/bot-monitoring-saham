@@ -17,7 +17,7 @@ def send_telegram_alert(message):
     try:
         requests.post(url, json=payload)
     except Exception as e:
-    print(f"ERROR APIFY: {e}")
+        print(f"ERROR TELEGRAM: {e}")
 
 def check_social_media():
     print("Memulai pengecekan postingan viral...")
