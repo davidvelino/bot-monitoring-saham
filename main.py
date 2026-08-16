@@ -21,21 +21,33 @@ def send_telegram_alert(message):
         print(f"ERROR TELEGRAM: {e}")
 
 def extract_views(item):
-    """Pencari angka views otomatis dari berbagai nama struktur JSON Apify"""
-    # 1. Cek langsung di tingkat utama
-    for key in ["viewCount", "viewsCount", "view_count", "views", "impressionCount", "impression_count"]:
-        val = item.get(key)
-        if val is not None and isinstance(val, (int, float)) and val > 0:
-            return int(val)
+    """Mencari views secara pintar dari angka, string, maupun objek berlapis"""
+    if not isinstance(item, dict):
+        return 0
     
-    # 2. Cek di dalam struktur berlapis (metrics / legacy / stats)
+    # 1. Cari key yang mengandung kata 'view' atau 'impression'
+    for key, val in item.items():
+        key_lower = str(key).lower()
+        if "view" in key_lower or "impression" in key_lower:
+            if isinstance(val, (int, float)) and val > 0:
+                return int(val)
+            if isinstance(val, str) and val.isdigit():
+                return int(val)
+            if isinstance(val, dict):
+                for sub_val in val.values():
+                    if isinstance(sub_val, (int, float)) and sub_val > 0:
+                        return int(sub_val)
+                    if isinstance(sub_val, str) and sub_val.isdigit():
+                        return int(sub_val)
+
+    # 2. Periksa objek berlapis seperti metrics/legacy/stats
     for nested_key in ["metrics", "legacy", "stats", "public_metrics"]:
-        nested = item.get(nested_key, {})
+        nested = item.get(nested_key)
         if isinstance(nested, dict):
-            for key in ["view_count", "impression_count", "viewsCount", "viewCount"]:
-                val = nested.get(key)
-                if val is not None and isinstance(val, (int, float)) and val > 0:
-                    return int(val)
+            res = extract_views(nested)
+            if res > 0:
+                return res
+
     return 0
 
 def check_social_media():
@@ -45,7 +57,6 @@ def check_social_media():
         print("ERROR: APIFY_TOKEN tidak ditemukan di Variables Railway!")
         return
 
-    # URL yang sudah diperbaiki (api.apify.com)
     apify_url = f"https://api.apify.com/v2/acts/apidojo~tweet-scraper/run-sync-get-dataset-items?token={APIFY_TOKEN}"
 
     for keyword in KEYWORDS:
@@ -63,7 +74,8 @@ def check_social_media():
                 print(f"Dapat {len(items)} postingan dari Apify.")
                 
                 if items and isinstance(items, list) and isinstance(items[0], dict):
-                    print(f"Keys data Apify: {list(items[0].keys())}")
+                    # Menampilkan struktur kunci data pertama untuk debugging
+                    print(f"DEBUG - Sample Keys Tweet: {list(items[0].keys())}")
 
                 for item in items:
                     if not isinstance(item, dict):
