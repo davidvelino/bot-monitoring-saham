@@ -23,38 +23,6 @@ def send_telegram_alert(message):
     except Exception as e:
         print(f"ERROR TELEGRAM: {e}")
 
-def get_tweet_text(item):
-    """Mencari teks tweet di berbagai kemungkinan lokasi kunci JSON"""
-    if not isinstance(item, dict):
-        return ""
-    
-    # 1. Cek kunci langsung
-    for key in ["text", "fullText", "full_text", "caption", "body", "content"]:
-        val = item.get(key)
-        if val and isinstance(val, str):
-            return val
-            
-    # 2. Cek jika terbungkus di dalam objek berlapis (tweet / legacy / data)
-    for sub in ["tweet", "legacy", "data"]:
-        nested = item.get(sub)
-        if isinstance(nested, dict):
-            res = get_tweet_text(nested)
-            if res:
-                return res
-                
-    return ""
-
-def get_tweet_url(item):
-    if not isinstance(item, dict):
-        return "https://x.com"
-    
-    for key in ["url", "twitterUrl", "tweetUrl", "canonicalUrl"]:
-        val = item.get(key)
-        if val and isinstance(val, str):
-            return val
-            
-    return "https://x.com"
-
 def check_social_media():
     print("Memulai pengecekan postingan viral...")
     
@@ -68,7 +36,7 @@ def check_social_media():
         print(f"Mencetak keyword: {keyword}")
         payload = {
             "searchTerms": [keyword],
-            "maxItems": 10,
+            "maxItems": 5,
             "sort": "Top"
         }
         
@@ -80,36 +48,34 @@ def check_social_media():
                 items = response.json()
                 print(f"Dapat {len(items)} item dari Apify untuk [{keyword}].")
                 
-                valid_count = 0
-                for item in items:
-                    if not isinstance(item, dict):
-                        continue
+                if isinstance(items, list) and len(items) > 0:
+                    # Menampilkan nama field asli untuk debugging log
+                    if isinstance(items[0], dict):
+                        print(f"KEYS DATA APIFY [{keyword}]: {list(items[0].keys())}")
                     
-                    # Abaikan jika ini hanya indikator tidak ada hasil
-                    if item.get("noResults") is True:
-                        continue
-                    
-                    text = get_tweet_text(item)
-                    url = get_tweet_url(item)
-                    
-                    if not text:
-                        print(f"--> [DEBUG] Item tanpa teks. Key yang ada: {list(item.keys())[:8]}")
-                        continue
+                    for item in items:
+                        if not isinstance(item, dict):
+                            continue
                         
-                    valid_count += 1
-                    safe_text = html.escape(text)
+                        # Pengambilan teks dengan beberapa skenario fallback
+                        text = item.get("text") or item.get("fullText") or item.get("full_text")
+                        if not text and isinstance(item.get("tweet"), dict):
+                            text = item.get("tweet", {}).get("text")
+                            
+                        url = item.get("url") or item.get("twitterUrl") or "https://x.com"
 
-                    print(f"--> MENGIRIM TWEET [{keyword}]: {text[:30]}...")
+                        if not text:
+                            text = f"Postingan terkait #{keyword}"
 
-                    msg = f"🔥 <b>Postingan Viral Found!</b>\n\nKeyword: #{keyword}\n\n{safe_text}\n\n<a href='{url}'>Buka Postingan</a>"
-                    send_telegram_alert(msg)
-                    
-                if valid_count == 0:
-                    print(f"--> Apify: Tidak ada postingan valid untuk '{keyword}'")
+                        safe_text = html.escape(str(text))
+                        msg = f"🔥 <b>Postingan Found!</b>\n\nKeyword: #{keyword}\n\n{safe_text}\n\n<a href='{url}'>Buka Postingan</a>"
+                        
+                        print(f"--> Mengirim postingan [{keyword}] ke Telegram...")
+                        send_telegram_alert(msg)
             else:
                 print(f"Apify Gagal [{keyword}]: {response.text}")
         except Exception as e:
-            print(f"ERROR SAAT MEMANGGIL APIFY [{keyword}]: {e}")
+            print(f"ERROR APIFY [{keyword}]: {e}")
 
 if __name__ == "__main__":
     while True:
