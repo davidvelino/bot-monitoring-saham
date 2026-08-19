@@ -1,5 +1,6 @@
 import os
 import time
+import html
 import requests
 
 # Mengambil konfigurasi dari Environment Variables Railway
@@ -7,41 +8,52 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 APIFY_TOKEN = os.getenv("APIFY_TOKEN")
 
-# Kata kunci yang dipantau
 KEYWORDS = ["saham", "crypto", "bitcoin", "ihsg", "btc"]
-MIN_VIEWS = 100  # Trigger minimal views / likes
 
 def send_telegram_alert(message):
+    if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
+        print("ERROR: Variable TELEGRAM_TOKEN atau TELEGRAM_CHAT_ID belum diisi di Railway!")
+        return
+
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "HTML"}
     try:
-        res = requests.post(url, json=payload)
-        print(f"Status kirim Telegram: {res.status_code}")
+        res = requests.post(url, json=payload, timeout=30)
+        print(f"Status Telegram: {res.status_code} | Respon: {res.text}")
     except Exception as e:
         print(f"ERROR TELEGRAM: {e}")
 
-def extract_metrics(item):
-    """Mengekstrak views dan likes"""
+def get_tweet_text(item):
+    """Mencari teks tweet di berbagai kemungkinan lokasi kunci JSON"""
     if not isinstance(item, dict):
-        return 0, 0
-
-    views = 0
-    for key in ["viewCount", "viewsCount", "view_count", "views", "impressionCount"]:
+        return ""
+    
+    # 1. Cek kunci langsung
+    for key in ["text", "fullText", "full_text", "caption", "body", "content"]:
         val = item.get(key)
-        if val is not None and isinstance(val, (int, float)) and val > 0:
-            views = int(val)
-            break
-        elif isinstance(val, str) and val.isdigit():
-            views = int(val)
-            break
+        if val and isinstance(val, str):
+            return val
+            
+    # 2. Cek jika terbungkus di dalam objek berlapis (tweet / legacy / data)
+    for sub in ["tweet", "legacy", "data"]:
+        nested = item.get(sub)
+        if isinstance(nested, dict):
+            res = get_tweet_text(nested)
+            if res:
+                return res
+                
+    return ""
 
-    likes = item.get("likeCount") or item.get("likes") or item.get("favorite_count") or 0
-    try:
-        likes = int(likes)
-    except Exception:
-        likes = 0
-
-    return views, likes
+def get_tweet_url(item):
+    if not isinstance(item, dict):
+        return "https://x.com"
+    
+    for key in ["url", "twitterUrl", "tweetUrl", "canonicalUrl"]:
+        val = item.get(key)
+        if val and isinstance(val, str):
+            return val
+            
+    return "https://x.com"
 
 def check_social_media():
     print("Memulai pengecekan postingan viral...")
@@ -54,7 +66,6 @@ def check_social_media():
 
     for keyword in KEYWORDS:
         print(f"Mencetak keyword: {keyword}")
-        
         payload = {
             "searchTerms": [keyword],
             "maxItems": 10,
@@ -74,23 +85,23 @@ def check_social_media():
                     if not isinstance(item, dict):
                         continue
                     
-                    # Hanya lewati jika nilai 'noResults' bernilai True secara eksplisit
+                    # Abaikan jika ini hanya indikator tidak ada hasil
                     if item.get("noResults") is True:
                         continue
                     
-                    text = item.get("text") or item.get("fullText") or item.get("full_text") or ""
-                    url = item.get("url") or item.get("twitterUrl") or item.get("tweetUrl") or ""
+                    text = get_tweet_text(item)
+                    url = get_tweet_url(item)
                     
                     if not text:
+                        print(f"--> [DEBUG] Item tanpa teks. Key yang ada: {list(item.keys())[:8]}")
                         continue
                         
                     valid_count += 1
-                    views, likes = extract_metrics(item)
+                    safe_text = html.escape(text)
 
-                    print(f"--> Postingan Found [{keyword}] | Views: {views} | Likes: {likes} | Teks: {text[:30]}...")
+                    print(f"--> MENGIRIM TWEET [{keyword}]: {text[:30]}...")
 
-                    metric_text = f"{views} views" if views > 0 else f"{likes} likes"
-                    msg = f"🔥 <b>Postingan Viral Found ({metric_text})!</b>\n\nKeyword: #{keyword}\n\n{text}\n\n<a href='{url}'>Buka Postingan</a>"
+                    msg = f"🔥 <b>Postingan Viral Found!</b>\n\nKeyword: #{keyword}\n\n{safe_text}\n\n<a href='{url}'>Buka Postingan</a>"
                     send_telegram_alert(msg)
                     
                 if valid_count == 0:
