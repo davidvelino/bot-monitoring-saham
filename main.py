@@ -8,14 +8,36 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 APIFY_TOKEN = os.getenv("APIFY_TOKEN")
 
-# Filter Kriteria Minimal
-KEYWORDS = ["saham", "crypto", "bitcoin", "ihsg", "btc"]
-MIN_VIEWS = 5000       # Minimal 5k views
-MIN_FOLLOWERS = 10000   # Minimal 10k followers
+# Minimum Views (Tanpa Batasan Followers)
+MIN_VIEWS = 5000
+
+# 1. DAFTAR AKUN TERKENAL DI INSTAGRAM
+INSTAGRAM_ACCOUNTS = [
+    "remoratrader",
+    "crypstock",
+    "akademicrypto",
+    "indonesiastockexchange",  # IDX
+    "stockbit",
+    "stockwise.id",
+    "cryptowave.id",
+    "ngomongsaham",
+    "coindesk"
+]
+
+# 2. DAFTAR AKUN TERKENAL DI X (TWITTER)
+TWITTER_ACCOUNTS = [
+    "akademicrypto",
+    "IDX_BEI",
+    "stockbit",
+    "CoinDesk",
+    "Cointelegraph",
+    "Binance",
+    "WhaleAlert"
+]
 
 def send_telegram_alert(caption, photo_url=None):
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
-        print("ERROR: TELEGRAM_TOKEN atau TELEGRAM_CHAT_ID belum diisi!")
+        print("ERROR: Variable Telegram belum diisi!")
         return
 
     if len(caption) > 1000:
@@ -54,11 +76,16 @@ def send_telegram_alert(caption, photo_url=None):
 
 # ==================== 1. MODUL X (TWITTER) ====================
 def fetch_twitter_news():
-    print("--- Checking Twitter/X ---")
+    print("--- Checking X (Twitter) Official Accounts ---")
     apify_url = f"https://api.apify.com/v2/acts/apidojo~tweet-scraper/run-sync-get-dataset-items?token={APIFY_TOKEN}"
 
-    for keyword in KEYWORDS:
-        payload = {"searchTerms": [keyword], "maxItems": 10, "sort": "Top"}
+    for username in TWITTER_ACCOUNTS:
+        # Mengambil postingan langsung dari timeline akun resmi
+        payload = {
+            "customQueries": [f"from:{username}"],
+            "maxItems": 3,
+            "sort": "Latest"
+        }
         try:
             res = requests.post(apify_url, json=payload, timeout=120)
             if res.status_code in [200, 201]:
@@ -67,22 +94,14 @@ def fetch_twitter_news():
                     if not isinstance(item, dict) or item.get("noResults") is True:
                         continue
                     
-                    author = item.get("author", {})
-                    followers = author.get("followersCount") or author.get("followers_count") or 0
                     views = item.get("viewCount") or item.get("viewsCount") or item.get("impressionCount") or 0
-                    
                     try:
-                        followers = int(followers)
                         views = int(views)
                     except ValueError:
-                        pass
+                        views = 0
 
-                    # FILTER KETAT: Followers & Views
-                    if followers < MIN_FOLLOWERS:
-                        print(f"--> [SKIP X] Followers kurang ({followers} < {MIN_FOLLOWERS})")
-                        continue
                     if views < MIN_VIEWS:
-                        print(f"--> [SKIP X] Views kurang ({views} < {MIN_VIEWS})")
+                        print(f"--> [SKIP X @{username}] Views kurang ({views} < {MIN_VIEWS})")
                         continue
 
                     text = item.get("fullText") or item.get("text") or item.get("full_text")
@@ -92,72 +111,65 @@ def fetch_twitter_news():
                     images = item.get("images") or item.get("photos") or []
                     photo_url = images[0] if (isinstance(images, list) and len(images) > 0 and isinstance(images[0], str)) else None
                     tweet_url = item.get("url") or item.get("twitterUrl") or "https://x.com"
-                    author_name = author.get("name") or author.get("userName") or "Twitter User"
 
                     caption = (
-                        f"🌐 <b>BERITA AKURAT X (TWITTER)</b>\n"
-                        f"🏷️ <b>Topic:</b> #{keyword}\n"
-                        f"👤 <b>Sumber:</b> {html.escape(author_name)} ({followers:,} Followers)\n"
+                        f"🌐 <b>BERITA OFFICIAL X (TWITTER)</b>\n"
+                        f"👤 <b>Sumber:</b> @{username}\n"
                         f"📊 <b>Views:</b> {views:,}\n\n"
-                        f"📝 <b>Deskripsi:</b>\n{html.escape(text)}\n\n"
+                        f"📝 <b>Deskripsi Berita:</b>\n{html.escape(text)}\n\n"
                         f"🔗 <a href='{tweet_url}'>Buka Postingan Asli</a>"
                     )
                     send_telegram_alert(caption, photo_url=photo_url)
         except Exception as e:
-            print(f"Error Twitter [{keyword}]: {e}")
+            print(f"Error Twitter [@{username}]: {e}")
 
 # ==================== 2. MODUL INSTAGRAM ====================
 def fetch_instagram_news():
-    print("--- Checking Instagram ---")
-    apify_url = f"https://api.apify.com/v2/acts/apify~instagram-hashtag-scraper/run-sync-get-dataset-items?token={APIFY_TOKEN}"
+    print("--- Checking Instagram Official Accounts ---")
+    apify_url = f"https://api.apify.com/v2/acts/apify~instagram-scraper/run-sync-get-dataset-items?token={APIFY_TOKEN}"
 
-    for keyword in KEYWORDS:
-        payload = {"hashtags": [keyword], "resultsLimit": 10}
-        try:
-            res = requests.post(apify_url, json=payload, timeout=120)
-            if res.status_code in [200, 201]:
-                items = res.json()
-                for item in items:
-                    if not isinstance(item, dict):
-                        continue
-                    
-                    followers = item.get("ownerFollowersCount") or item.get("owner", {}).get("followersCount") or 0
-                    views = item.get("videoViewCount") or item.get("videoPlayCount") or item.get("likesCount") or 0
-                    
-                    try:
-                        followers = int(followers)
-                        views = int(views)
-                    except ValueError:
-                        pass
+    payload = {
+        "directUrls": [f"https://www.instagram.com/{user}/" for user in INSTAGRAM_ACCOUNTS],
+        "resultsType": "posts",
+        "resultsLimit": 3
+    }
+    try:
+        res = requests.post(apify_url, json=payload, timeout=180)
+        if res.status_code in [200, 201]:
+            items = res.json()
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                
+                views = item.get("videoViewCount") or item.get("videoPlayCount") or item.get("likesCount") or 0
+                try:
+                    views = int(views)
+                except ValueError:
+                    views = 0
 
-                    # FILTER KETAT: Followers & Views
-                    if followers > 0 and followers < MIN_FOLLOWERS:
-                        print(f"--> [SKIP IG] Followers kurang ({followers} < {MIN_FOLLOWERS})")
-                        continue
-                    if views < MIN_VIEWS:
-                        print(f"--> [SKIP IG] Views/Interaksi kurang ({views} < {MIN_VIEWS})")
-                        continue
+                if views < MIN_VIEWS:
+                    print(f"--> [SKIP IG] Views kurang ({views} < {MIN_VIEWS})")
+                    continue
 
-                    caption_text = item.get("caption") or ""
-                    photo_url = item.get("displayUrl") or item.get("display_url")
-                    post_url = item.get("url") or f"https://www.instagram.com/p/{item.get('shortCode')}/"
-                    owner = item.get("ownerUsername") or "Instagram User"
+                caption_text = item.get("caption") or ""
+                photo_url = item.get("displayUrl") or item.get("display_url")
+                post_url = item.get("url") or f"https://www.instagram.com/p/{item.get('shortCode')}/"
+                owner = item.get("ownerUsername") or "Official Account"
 
-                    caption = (
-                        f"📸 <b>BERITA AKURAT INSTAGRAM</b>\n"
-                        f"🏷️ <b>Hashtag:</b> #{keyword}\n"
-                        f"👤 <b>Akun:</b> @{html.escape(owner)} ({followers:,} Followers)\n"
-                        f"📊 <b>Views/Likes:</b> {views:,}\n\n"
-                        f"📝 <b>Deskripsi Berita:</b>\n{html.escape(caption_text if caption_text else 'Postingan Gambar Instagram')}\n\n"
-                        f"🔗 <a href='{post_url}'>Buka di Instagram</a>"
-                    )
-                    send_telegram_alert(caption, photo_url=photo_url)
-        except Exception as e:
-            print(f"Error Instagram [{keyword}]: {e}")
+                caption = (
+                    f"📸 <b>BERITA OFFICIAL INSTAGRAM</b>\n"
+                    f"👤 <b>Akun:</b> @{html.escape(owner)}\n"
+                    f"📊 <b>Views/Likes:</b> {views:,}\n\n"
+                    f"📝 <b>Deskripsi Berita:</b>\n{html.escape(caption_text if caption_text else 'Postingan Berita Instagram')}\n\n"
+                    f"🔗 <a href='{post_url}'>Buka di Instagram</a>"
+                )
+                send_telegram_alert(caption, photo_url=photo_url)
+    except Exception as e:
+        print(f"Error Instagram Scraper: {e}")
 
 # ==================== MAIN EXECUTION ====================
 def check_social_media():
-    print("Memulai pengecekan berita akurat (Min 10k Followers & 5k Views)...")
+    print("Memulai pengecekan dari akun-akun resmi & terkenal...")
     if not APIFY_TOKEN:
         print("ERROR: APIFY_TOKEN tidak ditemukan!")
         return
