@@ -1,1 +1,5 @@
 requests
+feedparser
+newspaper3k
+deep-translator
+lxml_html_clean
