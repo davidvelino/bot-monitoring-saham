@@ -8,7 +8,7 @@ from newspaper import Article, Config
 from deep_translator import GoogleTranslator
 from bs4 import BeautifulSoup
 
-# Server Mini untuk Health Check Render (Agar berjalan 24/7 Gratis)
+# Server Mini untuk Health Check Render
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -20,7 +20,6 @@ def start_health_check_server():
     server = HTTPServer(('0.0.0.0', port), HealthCheckHandler)
     server.serve_forever()
 
-# Konfigurasi Environment Variables
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
@@ -72,6 +71,20 @@ def clean_html(raw_html):
         return ""
     soup = BeautifulSoup(raw_html, "html.parser")
     return soup.get_text(separator="\n").strip()
+
+def safe_translate(text):
+    """Penerjemah aman: Mencegah teks Error 500 Google masuk ke Telegram"""
+    if not text or len(text.strip()) == 0:
+        return ""
+    try:
+        chunk = text[:3500]
+        translated = GoogleTranslator(source='auto', target='id').translate(chunk)
+        if "Error 500" in translated or "Server Error" in translated or "Please try again later" in translated:
+            return chunk # Kembali ke teks asli jika Google bermasalah
+        return translated
+    except Exception as e:
+        print(f"Error Translating: {e}")
+        return text[:3500]
 
 def create_summary(raw_text):
     if not raw_text:
@@ -133,23 +146,18 @@ def process_and_translate_article(url, rss_summary):
         if not summary_text:
             summary_text = raw_text[:500] + "..."
 
-        translator = GoogleTranslator(source='auto', target='id')
-        return translator.translate(summary_text), top_image
+        return safe_translate(summary_text), top_image
 
     except Exception as e:
         print(f"Error scrape {url}: {e}")
         fallback_text = clean_html(rss_summary)
         if fallback_text:
-            try:
-                return GoogleTranslator(source='auto', target='id').translate(fallback_text[:500]), None
-            except:
-                return fallback_text, None
+            return safe_translate(fallback_text[:500]), None
         return "Gagal memuat isi berita.", None
 
 def check_news():
     print("Memeriksa berita terbaru...")
     sent_urls = load_sent_history()
-    translator = GoogleTranslator(source='auto', target='id')
 
     for source_name, feed_url in RSS_FEEDS.items():
         try:
@@ -160,7 +168,7 @@ def check_news():
                     continue
                 
                 print(f"--> Memproses: {source_name} | {entry.title[:30]}...")
-                title_id = translator.translate(entry.title)
+                title_id = safe_translate(entry.title)
                 rss_summary = entry.summary if 'summary' in entry else ""
 
                 summary_id, image_url = process_and_translate_article(url, rss_summary)
@@ -173,10 +181,7 @@ def check_news():
             print(f"Error {source_name}: {e}")
 
 if __name__ == "__main__":
-    # Jalankan Server Mini di Background
     threading.Thread(target=start_health_check_server, daemon=True).start()
-    
-    # Jalankan Patroli Berita
     while True:
         check_news()
         print("Selesai patroli. Menunggu 60 detik...")
