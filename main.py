@@ -5,7 +5,7 @@ import feedparser
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from newspaper import Article, Config
-from deep_translator import GoogleTranslator
+from deep_translator import GoogleTranslator, MyMemoryTranslator
 from bs4 import BeautifulSoup
 
 # Server Mini untuk Health Check Render
@@ -73,18 +73,30 @@ def clean_html(raw_html):
     return soup.get_text(separator="\n").strip()
 
 def safe_translate(text):
-    """Penerjemah aman: Mencegah teks Error 500 Google masuk ke Telegram"""
+    """Sistem Penerjemah Ganda: Google -> MyMemory -> Teks Asli"""
     if not text or len(text.strip()) == 0:
         return ""
+    
+    chunk = text[:1000] # Potong agar tidak melebihi batasan API
+
+    # Opsi 1: Coba Google Translator
     try:
-        chunk = text[:3500]
         translated = GoogleTranslator(source='auto', target='id').translate(chunk)
-        if "Error 500" in translated or "Server Error" in translated or "Please try again later" in translated:
-            return chunk # Kembali ke teks asli jika Google bermasalah
-        return translated
+        if "Error 500" not in translated and "Server Error" not in translated and "Please try again" not in translated:
+            return translated
     except Exception as e:
-        print(f"Error Translating: {e}")
-        return text[:3500]
+        print(f"Google Translate gagal: {e}")
+
+    # Opsi 2: Coba MyMemory Translator (Lebih stabil di server cloud)
+    try:
+        translated = MyMemoryTranslator(source='auto', target='id').translate(chunk)
+        if translated and "MYMEMORY WARNING" not in translated:
+            return translated
+    except Exception as e:
+        print(f"MyMemory Translate gagal: {e}")
+
+    # Opsi 3: Tampilkan teks asli jika semua penerjemah gagal
+    return chunk
 
 def create_summary(raw_text):
     if not raw_text:
