@@ -9,7 +9,7 @@ from newspaper import Article, Config
 from deep_translator import GoogleTranslator, MyMemoryTranslator
 from bs4 import BeautifulSoup
 
-# Server Mini untuk Health Check Render
+# Server Mini untuk Health Check Render (Agar bot tidak mati)
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -21,10 +21,11 @@ def start_health_check_server():
     server = HTTPServer(('0.0.0.0', port), HealthCheckHandler)
     server.serve_forever()
 
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")  # Bisa diisi @channel_username atau ID -100xxx
+# CONFIG TELEGRAM (Hanya Ambil dari Environment Variable)
+CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+TOKEN = os.getenv("TELEGRAM_TOKEN")
 
-# DAFTAR RSS FEEDS
+# DAFTAR RSS FEEDS (Akurat & Aktif 24/7)
 RSS_FEEDS = {
     # Crypto Real-time
     "Cointelegraph": "https://cointelegraph.com/rss",
@@ -56,10 +57,10 @@ def clean_html(raw_html):
     return soup.get_text(separator="\n").strip()
 
 def safe_translate_to_id(text):
-    """Penerjemah aman ke Bahasa Indonesia"""
+    """Menerjemahkan teks ke Bahasa Indonesia secara aman"""
     if not text or len(text.strip()) == 0:
         return ""
-    chunk = text[:1200]
+    chunk = text[:1000]
     
     try:
         translated = GoogleTranslator(source='auto', target='id').translate(chunk)
@@ -78,7 +79,7 @@ def safe_translate_to_id(text):
     return chunk
 
 def make_bullet_summary(raw_text):
-    """Membuat ringkasan padat berbentuk poin-poin singkat"""
+    """Membuat ringkasan berbentuk poin-poin padat"""
     if not raw_text:
         return "• Klik tautan di bawah untuk membaca artikel lengkap."
 
@@ -87,46 +88,46 @@ def make_bullet_summary(raw_text):
     if not paragraphs:
         return "• Klik tautan di bawah untuk membaca artikel lengkap."
 
-    # Ambil maksimal 3 paragraf kunci untuk diringkas
+    # Ambil 2 - 3 paragraf utama
     selected = paragraphs[:3]
     bullets = [f"• {p}" for p in selected]
     return "\n\n".join(bullets)
 
-def send_telegram_channel(title, original_url, photo_url, summary_id, source):
-    if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
-        print("ERROR: TELEGRAM_TOKEN atau TELEGRAM_CHAT_ID belum diisi!")
+def send_to_channel(text, image_url=None):
+    """Hanya mengirim pesan ke Telegram Channel"""
+    if not CHAT_ID or not TOKEN:
+        print("Error: TELEGRAM_CHAT_ID atau TELEGRAM_TOKEN belum diatur!")
         return
 
-    safe_source = html.escape(source)
-    safe_title = html.escape(title)
-    safe_summary = html.escape(summary_id)
-
-    caption = (
-        f"🚨 <b>{safe_source}</b> 🚨\n\n"
-        f"📌 <b>{safe_title}</b>\n\n"
-        f"💡 <b>Ringkasan Berita:</b>\n{safe_summary}\n\n"
-        f"🔗 <a href='{original_url}'>Baca Artikel Selengkapnya</a>"
-    )
-
-    if len(caption) > 1000:
-        caption = caption[:950] + f"...\n\n🔗 <a href='{original_url}'>Baca Artikel Selengkapnya</a>"
-
-    try:
-        # Kirim Foto jika ada
-        if photo_url:
-            url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendPhoto"
-            payload = {"chat_id": TELEGRAM_CHAT_ID, "photo": photo_url, "caption": caption, "parse_mode": "HTML"}
-            res = requests.post(url, json=payload, timeout=15)
+    # Kirim gambar + caption jika ada gambarnya
+    if image_url:
+        url = f"https://api.telegram.org/bot{TOKEN}/sendPhoto"
+        payload = {
+            "chat_id": CHAT_ID,  # HANYA KE CHANNEL
+            "photo": image_url,
+            "caption": text,
+            "parse_mode": "HTML"
+        }
+        try:
+            res = requests.post(url, data=payload, timeout=15)
             if res.status_code == 200:
-                return
+                return res.json()
+        except Exception:
+            pass
 
-        # Fallback kirim Teks Saja ke Channel
-        url_text = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-        payload_text = {"chat_id": TELEGRAM_CHAT_ID, "text": caption, "parse_mode": "HTML", "disable_web_page_preview": False}
-        requests.post(url_text, json=payload_text, timeout=15)
-
+    # Fallback kirim teks saja jika tidak ada gambar atau gambar gagal
+    url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
+    payload = {
+        "chat_id": CHAT_ID,  # HANYA KE CHANNEL
+        "text": text,
+        "parse_mode": "HTML",
+        "disable_web_page_preview": False
+    }
+    try:
+        res = requests.post(url, data=payload, timeout=15)
+        return res.json()
     except Exception as e:
-        print(f"Gagal mengirim ke Telegram Channel: {e}")
+        print(f"Gagal mengirim pesan ke Channel: {e}")
 
 def process_article(url, rss_summary):
     try:
@@ -157,7 +158,7 @@ def process_article(url, rss_summary):
         return "• Klik tautan di bawah untuk membaca langsung dari sumber resmi.", None
 
 def initialize_cache():
-    """Mencegah spam berita lama saat bot baru menyala"""
+    """Tandai berita lama agar tidak langsung terkirim semua saat bot dinyalakan"""
     print("Memuat cache awal... Mengunci berita lama...")
     for source_name, feed_url in RSS_FEEDS.items():
         try:
@@ -166,7 +167,7 @@ def initialize_cache():
                 SENT_URLS_CACHE.add(entry.link)
         except Exception:
             pass
-    print(f"Cache siap! {len(SENT_URLS_CACHE)} berita lama berhasil dilewati.")
+    print(f"Cache siap! {len(SENT_URLS_CACHE)} berita lama dilewati.")
 
 def check_news():
     print("Memeriksa rilis berita terbaru...")
@@ -182,13 +183,30 @@ def check_news():
 
                 SENT_URLS_CACHE.add(url)
 
-                print(f"--> [BERITA BARU] {source_name}: {entry.title[:30]}...")
+                print(f"--> [KIRIM KE CHANNEL] {source_name}: {entry.title[:30]}...")
                 
                 title_id = safe_translate_to_id(entry.title)
                 rss_summary = entry.summary if 'summary' in entry else ""
 
                 summary_id, image_url = process_article(url, rss_summary)
-                send_telegram_channel(title_id, url, image_url, summary_id, source_name)
+                
+                # Format Teks Pesan
+                safe_source = html.escape(source_name)
+                safe_title = html.escape(title_id)
+                safe_summary = html.escape(summary_id)
+
+                message = (
+                    f"🚨 <b>{safe_source}</b> 🚨\n\n"
+                    f"📌 <b>{safe_title}</b>\n\n"
+                    f"💡 <b>Ringkasan Berita:</b>\n{safe_summary}\n\n"
+                    f"🔗 <a href='{url}'>Baca Artikel Selengkapnya</a>"
+                )
+
+                if len(message) > 1000:
+                    message = message[:950] + f"...\n\n🔗 <a href='{url}'>Baca Artikel Selengkapnya</a>"
+
+                # Panggil fungsi kirim khusus ke channel
+                send_to_channel(message, image_url)
                 
                 time.sleep(2)
         except Exception as e:
@@ -201,5 +219,5 @@ if __name__ == "__main__":
     
     while True:
         check_news()
-        print("Patroli selesai. Menunggu 60 detik...")
+        print("Selesai cek. Menunggu 60 detik...")
         time.sleep(60)
