@@ -6,10 +6,10 @@ import feedparser
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from newspaper import Article, Config
-from deep_translator import GoogleTranslator, MyMemoryTranslator
+from deep_translator import GoogleTranslator
 from bs4 import BeautifulSoup
 
-# Server Mini untuk Health Check Render (Agar bot tidak mati)
+# Server Mini untuk Health Check Render
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -21,19 +21,17 @@ def start_health_check_server():
     server = HTTPServer(('0.0.0.0', port), HealthCheckHandler)
     server.serve_forever()
 
-# CONFIG TELEGRAM (Hanya Ambil dari Environment Variable)
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 
-# DAFTAR RSS FEEDS (Akurat & Aktif 24/7)
 RSS_FEEDS = {
-    # Crypto Real-time
+    # Crypto
     "Cointelegraph": "https://cointelegraph.com/rss",
     "CoinDesk": "https://www.coindesk.com/arc/outboundfeeds/rss/",
     "Pintu News": "https://pintu.co.id/blog/feed",
     "Blockchain Media ID": "https://blockchainmedia.id/feed/",
 
-    # Saham & Finansial Indonesia
+    # Indonesia Finance
     "CNBC Indonesia Market": "https://www.cnbcindonesia.com/market/rss",
     "CNBC Indonesia News": "https://www.cnbcindonesia.com/news/rss",
     "CNBC Indonesia Investment": "https://www.cnbcindonesia.com/investment/rss",
@@ -41,7 +39,7 @@ RSS_FEEDS = {
     "Kontan Investasi": "https://investasi.kontan.co.id/rss",
     "Detik Finance": "https://finance.detik.com/rss",
 
-    # Global Market & Forex
+    # Global Market
     "CNBC World News": "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrptogo&id=100727362",
     "MarketWatch Top Stories": "https://feeds.content.dowjones.io/public/rss/mw_topstories",
     "Yahoo Finance": "https://finance.yahoo.com/news/rssindex",
@@ -56,54 +54,52 @@ def clean_html(raw_html):
     soup = BeautifulSoup(raw_html, "html.parser")
     return soup.get_text(separator="\n").strip()
 
-def safe_translate_to_id(text):
-    """Menerjemahkan teks ke Bahasa Indonesia secara aman"""
+def force_translate_to_id(text):
+    """Memaksa penerjemahan ke Bahasa Indonesia dengan potongan teks pendek"""
     if not text or len(text.strip()) == 0:
         return ""
-    chunk = text[:1000]
+    
+    # Ambil maksimal 500 karakter agar Google Translator tidak memblokir
+    short_text = text[:500]
     
     try:
-        translated = GoogleTranslator(source='auto', target='id').translate(chunk)
-        if "Error 500" not in translated and "Server Error" not in translated:
+        translator = GoogleTranslator(source='auto', target='id')
+        translated = translator.translate(short_text)
+        if translated and "Error" not in translated:
             return translated
-    except Exception:
-        pass
-
-    try:
-        translated = MyMemoryTranslator(source='auto', target='id').translate(chunk)
-        if translated and "MYMEMORY WARNING" not in translated:
-            return translated
-    except Exception:
-        pass
-
-    return chunk
+    except Exception as e:
+        print(f"Gagal Translate: {e}")
+    
+    return short_text
 
 def make_bullet_summary(raw_text):
-    """Membuat ringkasan berbentuk poin-poin padat"""
+    """Mengambil 2-3 kalimat utama untuk diringkas"""
     if not raw_text:
-        return "• Klik tautan di bawah untuk membaca artikel lengkap."
+        return ""
 
-    paragraphs = [p.strip() for p in raw_text.split('\n') if len(p.strip()) > 60]
-    
+    paragraphs = [p.strip() for p in raw_text.split('\n') if len(p.strip()) > 50]
     if not paragraphs:
-        return "• Klik tautan di bawah untuk membaca artikel lengkap."
+        return ""
 
-    # Ambil 2 - 3 paragraf utama
-    selected = paragraphs[:3]
-    bullets = [f"• {p}" for p in selected]
+    # Ambil 2 paragraf teratas saja
+    selected = paragraphs[:2]
+    bullets = []
+    for p in selected:
+        # Terjemahkan tiap paragraf secara terpisah
+        translated_p = force_translate_to_id(p[:250])
+        bullets.append(f"• {translated_p}")
+
     return "\n\n".join(bullets)
 
 def send_to_channel(text, image_url=None):
-    """Hanya mengirim pesan ke Telegram Channel"""
     if not CHAT_ID or not TOKEN:
         print("Error: TELEGRAM_CHAT_ID atau TELEGRAM_TOKEN belum diatur!")
         return
 
-    # Kirim gambar + caption jika ada gambarnya
     if image_url:
         url = f"https://api.telegram.org/bot{TOKEN}/sendPhoto"
         payload = {
-            "chat_id": CHAT_ID,  # HANYA KE CHANNEL
+            "chat_id": CHAT_ID,
             "photo": image_url,
             "caption": text,
             "parse_mode": "HTML"
@@ -115,10 +111,9 @@ def send_to_channel(text, image_url=None):
         except Exception:
             pass
 
-    # Fallback kirim teks saja jika tidak ada gambar atau gambar gagal
     url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
     payload = {
-        "chat_id": CHAT_ID,  # HANYA KE CHANNEL
+        "chat_id": CHAT_ID,
         "text": text,
         "parse_mode": "HTML",
         "disable_web_page_preview": False
@@ -127,7 +122,7 @@ def send_to_channel(text, image_url=None):
         res = requests.post(url, data=payload, timeout=15)
         return res.json()
     except Exception as e:
-        print(f"Gagal mengirim pesan ke Channel: {e}")
+        print(f"Gagal kirim ke Telegram: {e}")
 
 def process_article(url, rss_summary):
     try:
@@ -146,28 +141,17 @@ def process_article(url, rss_summary):
         if not raw_text or len(raw_text) < 100:
             raw_text = clean_html(rss_summary)
 
-        raw_summary = make_bullet_summary(raw_text)
-        translated_summary = safe_translate_to_id(raw_summary)
+        summary_id = make_bullet_summary(raw_text)
+        if not summary_id:
+            summary_id = "• " + force_translate_to_id(clean_html(rss_summary)[:300])
 
-        return translated_summary, top_image
+        return summary_id, top_image
 
     except Exception:
         fallback_text = clean_html(rss_summary)
         if fallback_text:
-            return safe_translate_to_id(make_bullet_summary(fallback_text)), None
+            return "• " + force_translate_to_id(fallback_text[:300]), None
         return "• Klik tautan di bawah untuk membaca langsung dari sumber resmi.", None
-
-def initialize_cache():
-    """Tandai berita lama agar tidak langsung terkirim semua saat bot dinyalakan"""
-    print("Memuat cache awal... Mengunci berita lama...")
-    for source_name, feed_url in RSS_FEEDS.items():
-        try:
-            feed = feedparser.parse(feed_url)
-            for entry in feed.entries[:5]:
-                SENT_URLS_CACHE.add(entry.link)
-        except Exception:
-            pass
-    print(f"Cache siap! {len(SENT_URLS_CACHE)} berita lama dilewati.")
 
 def check_news():
     print("Memeriksa rilis berita terbaru...")
@@ -175,7 +159,7 @@ def check_news():
     for source_name, feed_url in RSS_FEEDS.items():
         try:
             feed = feedparser.parse(feed_url)
-            for entry in feed.entries[:3]:
+            for entry in feed.entries[:2]:
                 url = entry.link
                 
                 if url in SENT_URLS_CACHE:
@@ -185,12 +169,12 @@ def check_news():
 
                 print(f"--> [KIRIM KE CHANNEL] {source_name}: {entry.title[:30]}...")
                 
-                title_id = safe_translate_to_id(entry.title)
+                # Terjemahkan Judul
+                title_id = force_translate_to_id(entry.title)
                 rss_summary = entry.summary if 'summary' in entry else ""
 
                 summary_id, image_url = process_article(url, rss_summary)
                 
-                # Format Teks Pesan
                 safe_source = html.escape(source_name)
                 safe_title = html.escape(title_id)
                 safe_summary = html.escape(summary_id)
@@ -205,17 +189,13 @@ def check_news():
                 if len(message) > 1000:
                     message = message[:950] + f"...\n\n🔗 <a href='{url}'>Baca Artikel Selengkapnya</a>"
 
-                # Panggil fungsi kirim khusus ke channel
                 send_to_channel(message, image_url)
-                
                 time.sleep(2)
         except Exception as e:
             print(f"Error pada {source_name}: {e}")
 
 if __name__ == "__main__":
     threading.Thread(target=start_health_check_server, daemon=True).start()
-    
-    initialize_cache()
     
     while True:
         check_news()
