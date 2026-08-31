@@ -163,6 +163,18 @@ def process_article(url, rss_summary):
     summary_id = make_summary(extracted_text)
     return summary_id, top_image
 
+def initialize_cache():
+    """Mengunci berita yang ada saat ini agar tidak dikirim ulang saat startup"""
+    print("Memuat dan mengunci berita lama...")
+    for source_name, feed_url in RSS_FEEDS.items():
+        try:
+            feed = feedparser.parse(feed_url)
+            for entry in feed.entries[:5]:
+                SENT_URLS_CACHE.add(entry.link)
+        except Exception:
+            pass
+    print(f"Berhasil mengunci {len(SENT_URLS_CACHE)} berita lama.")
+
 def check_news():
     print("Memeriksa rilis berita terbaru...")
 
@@ -181,7 +193,6 @@ def check_news():
                 
                 title_id = translate_to_indonesian(entry.title)
                 
-                # Ambil deskripsi dari RSS jika ada
                 rss_summary = ""
                 if 'summary' in entry:
                     rss_summary = entry.summary
@@ -213,7 +224,10 @@ if __name__ == "__main__":
     threading.Thread(target=start_health_check_server, daemon=True).start()
     threading.Thread(target=self_ping, daemon=True).start()
     
+    # Mengunci berita yang sudah ada sebelum mulai mendeteksi
+    initialize_cache()
+    
     while True:
         check_news()
         print("Selesai cek. Menunggu 60 detik...")
-        time.sleep(60)  # Diubah menjadi 60 detik (1 menit)
+        time.sleep(60)  # Cek setiap 1 menit
