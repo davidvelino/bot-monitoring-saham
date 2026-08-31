@@ -9,18 +9,30 @@ from newspaper import Article, Config
 from deep_translator import GoogleTranslator
 from bs4 import BeautifulSoup
 
-# Server Mini untuk Health Check Render
+# 1. SERVER MINI UNTUK CEGAH RENDER SLEEP/MATI DI JAM TERNTENTU
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"Bot News Telegram Running Successfully!")
+        self.wfile.write(b"Bot Active 24/7")
 
 def start_health_check_server():
     port = int(os.getenv("PORT", 8080))
     server = HTTPServer(('0.0.0.0', port), HealthCheckHandler)
     server.serve_forever()
 
+# Auto Self-Ping tiap 5 menit agar Render Free Tier tidak pernah mati
+def self_ping():
+    render_url = os.getenv("RENDER_EXTERNAL_URL")
+    while True:
+        time.sleep(300)
+        if render_url:
+            try:
+                requests.get(render_url, timeout=10)
+            except Exception:
+                pass
+
+# CONFIG TELEGRAM (Hanya Mengambil dari Environment)
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 
@@ -51,29 +63,25 @@ SENT_URLS_CACHE = set()
 def clean_html(raw_html):
     if not raw_html:
         return ""
-    soup = BeautifulSoup(raw_html, "html.parser")
+    soup = BeautifulSoup(raw_html, "parser" if "html.parser" not in str(type(BeautifulSoup)) else "html.parser")
     return soup.get_text(separator="\n").strip()
 
 def force_translate_to_id(text):
-    """Memaksa penerjemahan ke Bahasa Indonesia dengan potongan teks pendek"""
+    """Penerjemah aman dengan sistem potong kecil agar tidak di-block"""
     if not text or len(text.strip()) == 0:
         return ""
     
-    # Ambil maksimal 500 karakter agar Google Translator tidak memblokir
-    short_text = text[:500]
-    
+    short_text = text[:400]
     try:
-        translator = GoogleTranslator(source='auto', target='id')
-        translated = translator.translate(short_text)
+        translated = GoogleTranslator(source='auto', target='id').translate(short_text)
         if translated and "Error" not in translated:
             return translated
-    except Exception as e:
-        print(f"Gagal Translate: {e}")
-    
+    except Exception:
+        pass
     return short_text
 
 def make_bullet_summary(raw_text):
-    """Mengambil 2-3 kalimat utama untuk diringkas"""
+    """Ringkasan padat 2 poin"""
     if not raw_text:
         return ""
 
@@ -81,21 +89,21 @@ def make_bullet_summary(raw_text):
     if not paragraphs:
         return ""
 
-    # Ambil 2 paragraf teratas saja
     selected = paragraphs[:2]
     bullets = []
     for p in selected:
-        # Terjemahkan tiap paragraf secara terpisah
-        translated_p = force_translate_to_id(p[:250])
+        translated_p = force_translate_to_id(p[:200])
         bullets.append(f"• {translated_p}")
 
     return "\n\n".join(bullets)
 
-def send_to_channel(text, image_url=None):
+def send_to_channel_only(text, image_url=None):
+    """Pengiriman MURNI ke Telegram Channel"""
     if not CHAT_ID or not TOKEN:
-        print("Error: TELEGRAM_CHAT_ID atau TELEGRAM_TOKEN belum diatur!")
+        print("ERROR: CHAT_ID atau TOKEN belum diset!")
         return
 
+    # Kirim Gambar + Caption
     if image_url:
         url = f"https://api.telegram.org/bot{TOKEN}/sendPhoto"
         payload = {
@@ -107,10 +115,11 @@ def send_to_channel(text, image_url=None):
         try:
             res = requests.post(url, data=payload, timeout=15)
             if res.status_code == 200:
-                return res.json()
+                return
         except Exception:
             pass
 
+    # Fallback Teks Saja
     url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
     payload = {
         "chat_id": CHAT_ID,
@@ -119,10 +128,9 @@ def send_to_channel(text, image_url=None):
         "disable_web_page_preview": False
     }
     try:
-        res = requests.post(url, data=payload, timeout=15)
-        return res.json()
+        requests.post(url, data=payload, timeout=15)
     except Exception as e:
-        print(f"Gagal kirim ke Telegram: {e}")
+        print(f"Gagal kirim ke Channel: {e}")
 
 def process_article(url, rss_summary):
     try:
@@ -143,15 +151,26 @@ def process_article(url, rss_summary):
 
         summary_id = make_bullet_summary(raw_text)
         if not summary_id:
-            summary_id = "• " + force_translate_to_id(clean_html(rss_summary)[:300])
+            summary_id = "• " + force_translate_to_id(clean_html(rss_summary)[:250])
 
         return summary_id, top_image
 
     except Exception:
         fallback_text = clean_html(rss_summary)
         if fallback_text:
-            return "• " + force_translate_to_id(fallback_text[:300]), None
+            return "• " + force_translate_to_id(fallback_text[:250]), None
         return "• Klik tautan di bawah untuk membaca langsung dari sumber resmi.", None
+
+def initialize_cache():
+    """Mengunci berita lama saat startup agar tidak banjir pesan"""
+    print("Memuat cache awal...")
+    for source_name, feed_url in RSS_FEEDS.items():
+        try:
+            feed = feedparser.parse(feed_url)
+            for entry in feed.entries[:3]:
+                SENT_URLS_CACHE.add(entry.link)
+        except Exception:
+            pass
 
 def check_news():
     print("Memeriksa rilis berita terbaru...")
@@ -169,7 +188,6 @@ def check_news():
 
                 print(f"--> [KIRIM KE CHANNEL] {source_name}: {entry.title[:30]}...")
                 
-                # Terjemahkan Judul
                 title_id = force_translate_to_id(entry.title)
                 rss_summary = entry.summary if 'summary' in entry else ""
 
@@ -189,15 +207,20 @@ def check_news():
                 if len(message) > 1000:
                     message = message[:950] + f"...\n\n🔗 <a href='{url}'>Baca Artikel Selengkapnya</a>"
 
-                send_to_channel(message, image_url)
-                time.sleep(2)
+                # Jalankan fungsi khusus channel
+                send_to_channel_only(message, image_url)
+                time.sleep(3)  # Jeda aman anti-block
         except Exception as e:
             print(f"Error pada {source_name}: {e}")
 
 if __name__ == "__main__":
+    # Jalankan server anti-sleep
     threading.Thread(target=start_health_check_server, daemon=True).start()
+    threading.Thread(target=self_ping, daemon=True).start()
+    
+    initialize_cache()
     
     while True:
         check_news()
-        print("Selesai cek. Menunggu 60 detik...")
-        time.sleep(60)
+        print("Selesai cek. Menunggu 120 detik...")
+        time.sleep(120)  # Pengecekan rutin tiap 2 menit
