@@ -7,8 +7,9 @@ import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from newspaper import Article, Config
 from bs4 import BeautifulSoup
+from deep_translator import GoogleTranslator
 
-# Server Mini Anti-Sleep
+# Server Mini Anti-Sleep untuk Render
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -58,65 +59,55 @@ RSS_FEEDS = {
 SENT_URLS_CACHE = set()
 
 def clean_html(raw_html):
-    """Menghapus tag HTML agar teks bersih"""
+    """Menghapus tag HTML dan merapikan spasi"""
     if not raw_html:
         return ""
     soup = BeautifulSoup(raw_html, "html.parser")
     return soup.get_text(separator=" ").strip()
 
-def translate_to_indonesian(text):
-    """API Google Translate Direct Endpoint"""
+def safe_translate(text):
+    """Menterjemahkan teks ke Bahasa Indonesia menggunakan Deep Translator"""
     if not text or len(text.strip()) == 0:
         return ""
     
-    text_to_translate = text[:500]
-    url = "https://translate.googleapis.com/translate_a/single"
-    params = {
-        "client": "gtx",
-        "sl": "auto",
-        "tl": "id",
-        "dt": "t",
-        "q": text_to_translate
-    }
+    # Potong maksimal 450 karakter agar aman dari pembatasan
+    text_to_translate = text[:450].strip()
     
     try:
-        response = requests.get(url, params=params, timeout=5)
-        if response.status_code == 200:
-            result = response.json()
-            translated_text = "".join([sentence[0] for sentence in result[0] if sentence[0]])
-            return translated_text
-    except Exception:
-        pass
+        translated = GoogleTranslator(source='auto', target='id').translate(text_to_translate)
+        if translated:
+            return translated
+    except Exception as e:
+        print(f"Gagal translate: {e}")
         
     return text_to_translate
 
 def make_summary(text, fallback_title=""):
-    """Memotong teks menjadi ringkasan padat dan memastikan selalu ada isi"""
+    """Membuat ringkasan padat 1-2 kalimat dalam Bahasa Indonesia"""
     clean_text = clean_html(text)
     
-    # Jika teks masih kosong setelah dibersihkan, gunakan judul sebagai fallback
-    if not clean_text or len(clean_text) < 10:
+    if not clean_text or len(clean_text) < 15:
         clean_text = fallback_title
 
     words = clean_text.split()
-    if len(words) > 40:
-        short_text = " ".join(words[:40]) + "..."
+    if len(words) > 35:
+        short_text = " ".join(words[:35]) + "..."
     else:
         short_text = clean_text
 
-    translated = translate_to_indonesian(short_text)
+    translated_summary = safe_translate(short_text)
     
-    # Jaminan akhir agar tidak pernah kosong
-    if not translated:
-        translated = translate_to_indonesian(fallback_title)
+    if not translated_summary:
+        translated_summary = safe_translate(fallback_title)
 
-    return f"• {translated}"
+    return f"• {translated_summary}"
 
 def send_to_channel_only(text, image_url=None):
     if not CHAT_ID or not TOKEN:
-        print("ERROR: CHAT_ID atau TOKEN belum diset!")
+        print("ERROR: CHAT_ID atau TOKEN belum diset di Environment Variables!")
         return
 
+    # Kirim Foto jika tersedia
     if image_url:
         url = f"https://api.telegram.org/bot{TOKEN}/sendPhoto"
         payload = {
@@ -129,9 +120,10 @@ def send_to_channel_only(text, image_url=None):
             res = requests.post(url, data=payload, timeout=15)
             if res.status_code == 200:
                 return
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"Gagal kirim photo, fallback ke text: {e}")
 
+    # Fallback Kirim Pesan Teks
     url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
     payload = {
         "chat_id": CHAT_ID,
@@ -142,15 +134,15 @@ def send_to_channel_only(text, image_url=None):
     try:
         requests.post(url, data=payload, timeout=15)
     except Exception as e:
-        print(f"Gagal kirim ke Channel: {e}")
+        print(f"Gagal kirim pesan ke Channel: {e}")
 
 def process_article(url, rss_summary, raw_title):
     top_image = None
     extracted_text = ""
 
-    # 1. Coba Scrape Artikel Web
+    # 1. Coba Scraping Isi Artikel Web
     try:
-        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'}
         config = Config()
         config.browser_user_agent = headers['User-Agent']
         config.request_timeout = 5
@@ -163,25 +155,13 @@ def process_article(url, rss_summary, raw_title):
     except Exception:
         pass
 
-    # 2. Jika Scrape Gagal, Gunakan Deskripsi RSS
+    # 2. Jika Scraping Web Gagal/Kosong, Gunakan Ringkasan bawaan RSS Feed
     if not extracted_text or len(extracted_text.strip()) < 30:
         extracted_text = rss_summary
 
-    # 3. Buat Ringkasan dengan Fallback ke Judul
+    # 3. Proses Ringkasan & Terjemahan
     summary_id = make_summary(extracted_text, fallback_title=raw_title)
     return summary_id, top_image
-
-def initialize_cache():
-    """Mengunci berita yang ada saat ini agar tidak dikirim ulang saat startup"""
-    print("Memuat dan mengunci berita lama...")
-    for source_name, feed_url in RSS_FEEDS.items():
-        try:
-            feed = feedparser.parse(feed_url)
-            for entry in feed.entries[:5]:
-                SENT_URLS_CACHE.add(entry.link)
-        except Exception:
-            pass
-    print(f"Berhasil mengunci {len(SENT_URLS_CACHE)} berita lama.")
 
 def check_news():
     print("Memeriksa rilis berita terbaru...")
@@ -189,20 +169,23 @@ def check_news():
     for source_name, feed_url in RSS_FEEDS.items():
         try:
             feed = feedparser.parse(feed_url)
+            # Ambil 2 berita teratas dari setiap portal
             for entry in feed.entries[:2]:
                 url = entry.link
                 
                 if url in SENT_URLS_CACHE:
                     continue
 
+                # Tandai URL agar tidak terkirim ganda
                 SENT_URLS_CACHE.add(url)
 
-                print(f"--> [KIRIM KE CHANNEL] {source_name}: {entry.title[:30]}...")
-                
                 raw_title = entry.title
-                title_id = translate_to_indonesian(raw_title)
+                print(f"--> [KIRIM KE CHANNEL] {source_name}: {raw_title[:30]}...")
                 
-                # Cek deskripsi dari berbagai attribute RSS
+                # Terjemahkan Judul
+                title_id = safe_translate(raw_title)
+                
+                # Ambil deskripsi dari RSS
                 rss_summary = ""
                 if 'summary' in entry:
                     rss_summary = entry.summary
@@ -212,7 +195,7 @@ def check_news():
                 summary_id, image_url = process_article(url, rss_summary, raw_title)
                 
                 safe_source = html.escape(source_name)
-                safe_title = html.escape(title_id)
+                safe_title = html.escape(title_id if title_id else raw_title)
                 safe_summary = html.escape(summary_id)
 
                 message = (
@@ -226,7 +209,7 @@ def check_news():
                     message = message[:950] + f"...\n\n🔗 <a href='{url}'>Baca Artikel Selengkapnya</a>"
 
                 send_to_channel_only(message, image_url)
-                time.sleep(2)
+                time.sleep(3) # Jeda antar pengiriman pesan
         except Exception as e:
             print(f"Error pada {source_name}: {e}")
 
@@ -234,8 +217,7 @@ if __name__ == "__main__":
     threading.Thread(target=start_health_check_server, daemon=True).start()
     threading.Thread(target=self_ping, daemon=True).start()
     
-    initialize_cache()
-    
+    # Tanpa initialize_cache() yang memblokir berita awal
     while True:
         check_news()
         print("Selesai cek. Menunggu 60 detik...")
