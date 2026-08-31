@@ -215,5 +215,5 @@ if __name__ == "__main__":
     
     while True:
         check_news()
-        print("Selesai cek. Menunggu 120 detik...")
-        time.sleep(120)
+        print("Selesai cek. Menunggu 60 detik...")
+        time.sleep(60)  # Diubah menjadi 60 detik (1 menit)
