@@ -90,12 +90,14 @@ def translate_to_indonesian(text):
         
     return text_to_translate
 
-def make_summary(text):
-    """Memotong teks menjadi ringkasan 2-3 kalimat padat"""
-    if not text:
-        return ""
-    
+def make_summary(text, fallback_title=""):
+    """Memotong teks menjadi ringkasan padat dan memastikan selalu ada isi"""
     clean_text = clean_html(text)
+    
+    # Jika teks masih kosong setelah dibersihkan, gunakan judul sebagai fallback
+    if not clean_text or len(clean_text) < 10:
+        clean_text = fallback_title
+
     words = clean_text.split()
     if len(words) > 40:
         short_text = " ".join(words[:40]) + "..."
@@ -103,6 +105,11 @@ def make_summary(text):
         short_text = clean_text
 
     translated = translate_to_indonesian(short_text)
+    
+    # Jaminan akhir agar tidak pernah kosong
+    if not translated:
+        translated = translate_to_indonesian(fallback_title)
+
     return f"• {translated}"
 
 def send_to_channel_only(text, image_url=None):
@@ -137,11 +144,11 @@ def send_to_channel_only(text, image_url=None):
     except Exception as e:
         print(f"Gagal kirim ke Channel: {e}")
 
-def process_article(url, rss_summary):
+def process_article(url, rss_summary, raw_title):
     top_image = None
     extracted_text = ""
 
-    # Coba scrape isi artikel web
+    # 1. Coba Scrape Artikel Web
     try:
         headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
         config = Config()
@@ -156,11 +163,12 @@ def process_article(url, rss_summary):
     except Exception:
         pass
 
-    # Jika scraping web gagal/kosong, paksa pakai deskripsi dari RSS Feed
-    if not extracted_text or len(extracted_text.strip()) < 50:
+    # 2. Jika Scrape Gagal, Gunakan Deskripsi RSS
+    if not extracted_text or len(extracted_text.strip()) < 30:
         extracted_text = rss_summary
 
-    summary_id = make_summary(extracted_text)
+    # 3. Buat Ringkasan dengan Fallback ke Judul
+    summary_id = make_summary(extracted_text, fallback_title=raw_title)
     return summary_id, top_image
 
 def initialize_cache():
@@ -191,15 +199,17 @@ def check_news():
 
                 print(f"--> [KIRIM KE CHANNEL] {source_name}: {entry.title[:30]}...")
                 
-                title_id = translate_to_indonesian(entry.title)
+                raw_title = entry.title
+                title_id = translate_to_indonesian(raw_title)
                 
+                # Cek deskripsi dari berbagai attribute RSS
                 rss_summary = ""
                 if 'summary' in entry:
                     rss_summary = entry.summary
                 elif 'description' in entry:
                     rss_summary = entry.description
 
-                summary_id, image_url = process_article(url, rss_summary)
+                summary_id, image_url = process_article(url, rss_summary, raw_title)
                 
                 safe_source = html.escape(source_name)
                 safe_title = html.escape(title_id)
@@ -224,10 +234,9 @@ if __name__ == "__main__":
     threading.Thread(target=start_health_check_server, daemon=True).start()
     threading.Thread(target=self_ping, daemon=True).start()
     
-    # Mengunci berita yang sudah ada sebelum mulai mendeteksi
     initialize_cache()
     
     while True:
         check_news()
         print("Selesai cek. Menunggu 60 detik...")
-        time.sleep(60)  # Cek setiap 1 menit
+        time.sleep(60)
